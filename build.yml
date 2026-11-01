@@ -1,0 +1,15 @@
+name: Build Windows EXE
+on: [push]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Compile C++
+      run: |
+        cl.exe main.cpp /Fe:Crypt.exe /O2 /MT
+    - name: Upload EXE
+      uses: actions/upload-artifact@v3
+      with:
+        name: crypted-payload
+        path: Crypt.exe
