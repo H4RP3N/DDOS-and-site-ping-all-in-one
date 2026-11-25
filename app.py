@@ -4,7 +4,7 @@ import json, os, re, shutil, socket, sqlite3, ssl, struct, subprocess, threading
 from datetime import datetime, timezone
 
 import requests, urllib3
-from flask import Flask, jsonify, render_template_string, request, send_file, abort
+from flask import Flask, jsonify, render_template, request, send_file, abort
 
 urllib3.disable_warnings()
 
@@ -420,6 +420,24 @@ def m_ext(sc):
 PHASES = [("recon", m_recon), ("tls", m_tls), ("headers", m_hdr), ("tech", m_tech), ("wp", m_wp),
           ("admin", m_admin), ("expo", m_expo), ("js", m_js), ("cve", m_cve), ("ext", m_ext)]
 
+def write_deploy(sc):
+    L = ["#!/usr/bin/env bash", f"# ROOTLESS {sc.target} {datetime.now():%F %T}", "set -uo pipefail",
+         'T="$0.out"; mkdir -p "$T"']
+    for f in q("SELECT * FROM findings WHERE scan_id=? AND severity!='info'", (sc.sid,)):
+        t = f["title"]
+        try: tid = json.loads(f["extra"] or "{}").get("template")
+        except Exception: tid = None
+        if tid: L.append(f'nuclei -u "{sc.target}" -t {tid} -jsonl | tee -a "$T/{tid}.jsonl"')
+        elif re.search(r"CVE-\d{4}-\d+", t):
+            c = re.search(r"CVE-\d{4}-\d+", t).group(0)
+            L.append(f'nuclei -u "{sc.target}" -id {c} | tee -a "$T/{c}.txt"')
+        elif f["module"] == "wordpress":
+            L.append(f'wpscan --url "{sc.target}" --enumerate vp,vt,u --random-user-agent')
+        elif f["module"] == "hydra":
+            L.append(f'# credentials found: {f["evidence"][:80]}')
+    open(os.path.join(sc.dir, "deploy.sh"), "w").write("\n".join(L) + "\n")
+    os.chmod(os.path.join(sc.dir, "deploy.sh"), 0o755)
+
 def runner(sid):
     s = q("SELECT * FROM scans WHERE id=?", (sid,), one=True)
     if not s: return
@@ -514,47 +532,97 @@ class Term:
         if self.fd: os.write(self.fd, s.encode())
 
 TERM = Term()
+app = Flask(__name__)
 
-CSS = """
-:root{--bg:#05070a;--p:#0b1014;--l:#16311f;--g:#35ff7a;--d:#7f9b88;--c:#ff4d5e;--h:#ff9d3d;--m:#ffd93d;--lo:#6ec1ff}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#d7e5da;font:13px ui-monospace,Menlo,Consolas,monospace;display:flex;min-height:100vh}
-a{color:var(--g)}.side{width:190px;flex:0 0 190px;background:#04070a;border-right:1px solid var(--l);padding:12px;display:flex;flex-direction:column;gap:14px;height:100vh;position:sticky;top:0}
-.brand{display:block;font-size:17px;letter-spacing:3px;color:var(--g);text-decoration:none;text-shadow:0 0 12px #35ff7a88;padding:6px 2px 10px;border-bottom:1px solid var(--l)}
-.nav a{display:block;padding:7px 9px;border:1px solid var(--l);border-radius:4px;text-decoration:none;margin-bottom:6px;color:#cfe6d6;font-size:12px}
-.nav a:hover{border-color:var(--g);color:var(--g)}.foot{margin-top:auto;font-size:10px;color:var(--d)}
-.main{flex:1;padding:22px 26px;max-width:1150px}h1{font-size:18px;margin:0 0 14px}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--d);margin:22px 0 8px}
-.card{background:var(--p);border:1px solid var(--l);border-radius:5px;padding:14px;width:100%}
-label{display:block;margin-bottom:10px;font-size:11px;color:var(--d);text-transform:uppercase;letter-spacing:1px}
-input,select,textarea{width:100%;margin-top:5px;padding:8px;background:#04070a;border:1px solid var(--l);color:#e4f2e8;border-radius:4px;font-family:inherit;font-size:13px}
-input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g)}
-button,.btn{background:transparent;border:1px solid var(--g);color:var(--g);padding:8px 15px;border-radius:4px;cursor:pointer;font:inherit;font-size:12px;text-decoration:none;display:inline-block}
-button:hover,.btn:hover{background:#35ff7a1c}table{border-collapse:collapse;font-size:12px;width:100%}
-th,td{text-align:left;padding:7px 9px;border-bottom:1px solid #101a13;vertical-align:top}
-th{color:var(--d);font-size:10px;text-transform:uppercase}
-.m{color:var(--d)}.s{font-size:11px}.sev{font-weight:700;text-transform:uppercase;font-size:10px}
-.critical{color:var(--c)}.high{color:var(--h)}.medium{color:var(--m)}.low{color:var(--lo)}.info{color:var(--d)}
-.bar{height:5px;background:#0d1610;border:1px solid var(--l);border-radius:3px;overflow:hidden}
-.bar>div{height:100%;background:var(--g);transition:width .4s}
-.acts{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap}
-.log{background:#030605;border:1px solid var(--l);border-radius:5px;padding:10px;height:200px;overflow:auto;font-size:11px;color:#8fd6a5;white-space:pre-wrap}
-#term{height:60vh;background:#030605;border:1px solid var(--l);border-radius:5px;padding:6px}
-.st-running{color:var(--m)}.st-done{color:var(--g)}.st-failed{color:var(--c)}
-@media print{.side,.acts,.log{display:none}body{display:block}}
-"""
+@app.route("/")
+def index():
+    return render_template("index.html", scans=q("SELECT * FROM scans ORDER BY id DESC LIMIT 30"))
 
-BASE_T = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block t %}ROOTLESS{% endblock %}</title><!--CSS-->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"></head><body>
-<aside class="side"><a href="/" class="brand">ROOTLESS</a>
-<nav class="nav"><a href="/">new scan</a><a href="/#history">history</a><a href="/term">terminal</a>
-<a href="/vulndb">vulndb</a></nav><div class="foot">v2.0 &middot; local only</div></aside>
-<main class="main">{% block b %}{% endblock %}</main></body></html>"""
-BASE_T = BASE_T.replace("<!--CSS-->", "<style>" + CSS + "</style>")
+@app.post("/api/scan")
+def api_scan():
+    d = request.get_json(silent=True) or request.form
+    try: tgt, host, sch, port = norm(d.get("target"))
+    except Exception as e: return jsonify({"error": str(e)}), 400
+    prof = d.get("profile") if d.get("profile") in ("passive", "standard") else "standard"
+    sid = x("INSERT INTO scans(target,host,profile,created) VALUES(?,?,?,?)", (tgt, host, prof, time.time()))
+    start(sid); return jsonify({"id": sid})
 
-INDEX_T = BASE_T.replace("{% block t %}ROOTLESS{% endblock %}", "scan")
-INDEX_T = INDEX_T.replace("{% block b %}{% endblock %}", """
-<h1>Scan target</h1><form id="f" class="card">
-<label>Target<input id="t" placeholder="example.com" required autofocus></label>
-<label>Profile<select id="p"><option value="standard" selected>standard - recon, headers, tech, WP, CVE, nmap,
+@app.get("/api/scan/<int:sid>")
+def api_state(sid):
+    s = q("SELECT * FROM scans WHERE id=?", (sid,), one=True)
+    if not s: abort(404)
+    return jsonify({"scan": s, "findings": q("SELECT * FROM findings WHERE scan_id=? ORDER BY cvss DESC", (sid,)),
+                    "logs": q("SELECT id,line FROM logs WHERE scan_id=? AND id>? ORDER BY id LIMIT 300",
+                              (sid, request.args.get("after", 0, type=int))),
+                    "artifacts": [a["name"] for a in q("SELECT name FROM artifacts WHERE scan_id=?", (sid,))]})
+
+@app.get("/scan/<int:sid>")
+def scan_view(sid):
+    s = q("SELECT * FROM scans WHERE id=?", (sid,), one=True)
+    if not s: abort(404)
+    return render_template("scan.html", scan=s)
+
+@app.post("/api/hydra/<int:sid>")
+def api_hydra(sid):
+    d = request.get_json(force=True)
+    return jsonify(hydra_run(sid, d.get("service", "ssh"), d.get("port"),
+                             d.get("users") or ["admin"], d.get("pwds") or ["admin"]))
+
+@app.get("/api/hydra/<int:sid>")
+def api_hydra_state(sid):
+    return jsonify(BRUTE.get(sid, {"out": "", "done": True}))
+
+@app.post("/api/term/start")
+def term_start():
+    TERM.start(); return jsonify({"ok": True})
+
+@app.get("/api/term/read")
+def term_read():
+    return jsonify({"out": TERM.rd()})
+
+@app.post("/api/term/write")
+def term_write():
+    TERM.wr((request.get_json(force=True) or {}).get("d", "")); return jsonify({"ok": True})
+
+@app.get("/term")
+def term_page():
+    return render_template("term.html")
+
+@app.get("/vulndb")
+def vdb_page():
+    d = vdb(); rows = d["wp"] + d["js"]; k = request.args.get("q", "").lower()
+    if k: rows = [r for r in rows if k in json.dumps(r).lower()]
+    return render_template("vulndb.html", rows=rows[:400], q=k, wp=len(d["wp"]), js=len(d["js"]))
+
+@app.get("/api/export/<int:sid>.json")
+def export(sid):
+    s = q("SELECT * FROM scans WHERE id=?", (sid,), one=True)
+    if not s: abort(404)
+    p = os.path.join(SCANS, str(sid), "report.json")
+    open(p, "w").write(json.dumps({"scan": s, "findings": q("SELECT * FROM findings WHERE scan_id=?", (sid,))},
+                                  indent=2))
+    return send_file(p, as_attachment=True, download_name=f"rootless-{sid}.json")
+
+@app.get("/api/deploy/<int:sid>.sh")
+def deploy(sid):
+    p = os.path.join(SCANS, str(sid), "deploy.sh")
+    if not os.path.exists(p): abort(404)
+    return send_file(p, as_attachment=True, download_name=f"rootless-{sid}.sh")
+
+@app.get("/artifact/<int:sid>/<path:name>")
+def artifact(sid, name):
+    p = os.path.join(SCANS, str(sid), name)
+    if not os.path.exists(p): abort(404)
+    return send_file(p)
+
+def main():
+    import argparse
+    dinit()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=8088)
+    a = ap.parse_args()
+    print(f"[+] ROOTLESS -> http://{a.host}:{a.port}")
+    app.run(a.host, a.port, threaded=True)
+
+if __name__ == "__main__":
+    main()
