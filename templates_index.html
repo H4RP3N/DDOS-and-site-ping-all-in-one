@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block title %}scan{% endblock %}
+{% block body %}
+<h1>Scan target</h1>
+<form id="f" class="card">
+  <label>Target<input id="t" placeholder="example.com" required=""></label>
+  <label>Profile<select id="p">
+    <option value="standard" selected="">standard - recon, headers, tech, WP, CVE, nmap, nuclei</option>
+    <option value="passive">passive - no external binaries</option>
+  </select></label>
+  <button>Start</button>
+  <p class="m s">Only scan hosts you are authorised to test.</p>
+</form>
+<h2 id="history">History</h2>
+
+  {% for s in scans %}
+    
+  {% else %}
+    
+  {% endfor %}
+  <table class="card">
+  <thead><tr><th>#</th><th>target</th><th>status</th><th>grade</th><th></th></tr></thead>
+  <tbody><tr><td>{{s.id}}</td><td class="m">{{s.target}}</td><td class="st-{{s.status}}">{{s.status}}</td>
+        <td>{{s.grade or '-'}}</td><td><a href="/scan/{{s.id}}">open</a></td></tr><tr><td colspan="5" class="m">none yet</td></tr></tbody>
+</table>
+
+{% endblock %}

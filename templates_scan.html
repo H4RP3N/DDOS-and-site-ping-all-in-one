@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% block title %}scan #{{scan.id}}{% endblock %}
+{% block body %}
+<h1>{{scan.target}}</h1>
+<p class="m s">{{scan.profile}} · <span id="st">{{scan.status}}</span> <span id="gr"></span></p>
+<div class="bar"><div id="pb" style="width:{{scan.progress}}%"></div></div>
+<p class="m s" id="ph"></p>
+<div class="acts">
+  <a class="btn" href="/api/export/{{scan.id}}.json">export json</a>
+  <a class="btn" href="/api/deploy/{{scan.id}}.sh">deploy.sh</a>
+  <button>print</button>
+</div>
+<h2>Findings</h2>
+<table class="card"><thead><tr><th>sev</th><th>finding</th><th>module</th><th>evidence</th></tr></thead>
+<tbody id="fs"></tbody></table>
+<h2>Hydra</h2>
+<form id="hf" class="card">
+  <label>Service<select id="hs">
+    <option>ssh</option><option>ftp</option><option>rdp</option><option>mysql</option>
+    <option>postgres</option><option>http-post-form</option><option>http-get</option>
+  </select></label>
+  <label>Port<input id="hp" placeholder="22"></label>
+  <label>Users (one per line)<textarea id="hu" rows="3">admin
+root</textarea></label>
+  <label>Passwords<textarea id="hw" rows="3">admin
+password
+root
+123456</textarea></label>
+  <button>Run hydra</button>
+</form>
+<pre id="ho" class="log"></pre>
+<h2>Artifacts</h2><ul id="af" class="m s"></ul>
+<h2>Log</h2><pre id="lg" class="log"></pre>
+
+{% endblock %}

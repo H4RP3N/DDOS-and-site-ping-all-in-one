@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}vulndb{% endblock %}
+{% block body %}
+<h1>Vulnerability database</h1>
+<p class="m s">{{wp}} WordPress records · {{js}} JavaScript records · CVSS ≥ 9.0 · 2018-2026</p>
+<form class="card">
+  <label>Search<input name="q" value="{{q}}" placeholder="CVE, package, description"></label>
+  <button>Filter</button>
+</form>
+
+  {% for r in rows %}
+    
+  {% endfor %}
+  <table class="card">
+  <thead><tr><th>id</th><th>published</th><th>component</th><th>description</th><th>cvss</th></tr></thead>
+  <tbody><tr><td class="m s">{{r.id}}</td><td class="m s">{{r.pub}}</td><td>{{r.comp}}</td>
+        <td class="s">{{r.desc}}</td><td class="critical">{{r.cvss}}</td></tr></tbody>
+</table>
+{% endblock %}
